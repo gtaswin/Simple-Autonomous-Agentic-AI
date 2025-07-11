@@ -1,0 +1,135 @@
+# Autonomous Agentic AI System Configuration
+# 3-Agent Architecture: Memory + Research + Intelligence
+
+# System Configuration
+system:
+  default_user_id: "admin"
+
+# Model Categories - Working providers with proper model names
+model_categories:
+  # Fast operations (high frequency)
+  fast: ["groq/llama3-8b-8192", "gemini/gemini-1.5-flash", "anthropic/claude-3-haiku"]
+  
+  # Balanced operations (normal conversations)
+  balanced: ["groq/llama3-70b-8192", "gemini/gemini-1.5-flash", "anthropic/claude-3-haiku"]
+  
+  # Quality operations (complex reasoning)
+  quality: ["groq/llama3-70b-8192", "openrouter/deepseek/deepseek-r1", "anthropic/claude-3-sonnet"]
+  
+  # Premium operations (autonomous thinking)
+  premium: ["groq/llama3-70b-8192", "anthropic/claude-3-opus", "openai/gpt-4o"]
+
+# Function to Category Mapping for Autonomous System
+ai_functions:
+  memory: "fast"                 # Memory operations
+  chat: "balanced"               # User conversations  
+  research: "quality"            # External research
+  reasoning: "quality"           # Complex analysis
+  autonomous: "premium"          # Autonomous thinking cycles
+
+# Token Limits Configuration
+token_limits:
+  fast_operations: 4096
+  balanced_operations: 8192
+  quality_operations: 16384
+  premium_operations: 32768
+  absolute_maximum: 65536
+
+# Provider API Keys
+providers:
+  groq:
+    api_key: ""
+    
+  gemini:
+    api_key: ""
+    
+  anthropic:
+    api_key: ""
+    
+  openai:
+    api_key: ""
+    
+  openrouter:
+    api_key: ""
+    base_url: "https://openrouter.ai/api/v1"
+
+# Research Agent Configuration 
+research:
+  tavily_api_key: ""
+  enabled: true
+  max_results: 5
+  search_depth: "basic"
+
+# Memory System Configuration
+memory:
+  vector_store: "qdrant"
+  intelligent_filtering:
+    enabled: true
+    storage_threshold: 0.5
+    use_ai_analysis: true
+
+# Database Configurations
+databases:
+  redis:
+    host: "localhost"
+    port: 6379
+    db: 0
+    password: null
+    max_connections: 20
+    default_ttl: 604800
+    max_working_items: 7
+  qdrant:
+    host: "localhost"
+    port: 6333
+    grpc_port: 6334
+    prefer_grpc: false
+    collection_name: "agent_memories"
+    vector_size: 384
+    similarity_threshold: 0.7
+
+# Autonomous Agent Configuration
+autonomous:
+  thinking_interval_seconds: 3600  # Hourly thinking cycles
+  enable_background_thinking: true
+  enable_proactive_insights: true
+
+# Autonomous Agent System Messages
+agent_system_messages:
+  memory_agent: "You are the Memory Agent - the primary user interface hub. Handle all chat interactions, manage memory operations, and coordinate with other agents when needed. You have full access to user memory."
+  research_agent: "You are the Research Agent - external knowledge specialist. Search the web, verify facts, and provide current information. You cannot access personal user data but can gather external knowledge."
+  intelligence_agent: "You are the Intelligence Agent - autonomous thinking specialist. Analyze patterns, create life event timelines, generate proactive insights, and perform continuous reasoning. You have full memory access for strategic analysis."
+
+# TransformersService Configuration
+transformers:
+  models:
+    memory_classifier: "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
+    intent_classifier: "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
+    sentiment_analyzer: "cardiffnlp/twitter-roberta-base-sentiment-latest"
+    entity_extractor: "dbmdz/bert-large-cased-finetuned-conll03-english"
+    summarizer: "facebook/bart-large-cnn"
+    embedder: "sentence-transformers/all-MiniLM-L6-v2"
+  
+  performance:
+    cache_size: 1000
+    device: "auto"
+    max_length: 512
+    batch_size: 1
+  
+  fallback:
+    enabled: true
+    confidence_threshold: 0.3
+    use_keyword_fallback: true
+
+# Timeout Configurations
+timeouts:
+  api_calls: 60
+  database_operations: 20
+  local_model_loading: 30
+  websocket_connections: 10
+
+# Development Settings
+development:
+  debug_mode: true
+  verbose_logging: true
+  monitoring_enabled: true
+  metrics_collection: true

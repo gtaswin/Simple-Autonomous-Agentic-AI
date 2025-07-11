@@ -1,0 +1,186 @@
+# AI Personal Assistant Configuration
+# Copy this file to settings.yaml and customize for your setup
+
+# System Configuration
+system:
+  default_user_id: "admin"  # Default user ID for single-user system
+  session_timeout_hours: 24  # Session timeout in hours
+  max_concurrent_sessions: 5  # Maximum concurrent sessions per user
+
+# Model Categories - Direct model lists with automatic fallback
+# Strategy: Category-based routing with multi-provider support
+model_categories:
+  # Fast operations (high frequency) - Local and fast models
+  fast: ["groq/qwen/qwen3-32b", "gemini/gemini-1.5-flash", "openai/gpt-4o-mini", "anthropic/claude-3-haiku"]
+  
+  # Balanced operations (medium frequency) - Groq Qwen3-32B and fallbacks
+  balanced: ["groq/qwen/qwen3-32b", "ollama/qwen3:0.6b", "gemini/gemini-1.5-flash", "anthropic/claude-3-haiku"]
+  
+  # Quality operations (lower frequency) - High-quality models including Groq
+  quality: ["groq/deepseek-r1-distill-llama-70b", "openrouter/deepseek/deepseek-r1-0528:free", "gemini/gemini-1.5-flash", "openai/gpt-4o"]
+  
+  # Premium operations (rare usage) - Best available models
+  premium: ["groq/deepseek-r1-distill-llama-70b", "openrouter/deepseek/deepseek-r1-0528:free", "gemini/gemini-1.5-flash", "gemini/gemini-1.5-pro"]
+
+# Function to Category Mapping
+ai_functions:
+  memory: "fast"                 # Memory storage/retrieval
+  coordination: "fast"           # Agent coordination
+  chat: "balanced"               # User conversations  
+  thinking: "balanced"           # Background reasoning
+  reasoning: "quality"           # Complex reasoning
+  research: "quality"            # External research
+  creative: "premium"            # Creative writing
+  decisions: "premium"           # Critical decisions
+
+# Token Limits Configuration (Centralized)
+token_limits:
+  # Task-based intelligent limits
+  fast_operations: 800           # Quick responses, status checks
+  balanced_operations: 1500      # Normal conversations, analysis
+  quality_operations: 2500       # Complex reasoning, explanations
+  premium_operations: 4000       # Multi-step planning, creative tasks
+  
+  # Function-specific overrides
+  memory_analysis: 600           # Memory classification
+  chat_response: 1200            # User chat responses
+  thinking_session: 2000         # Background reasoning
+  research_summary: 1800         # Research analysis
+  goal_planning: 3000            # PDDL planning
+  
+  # Safety limits
+  absolute_maximum: 8000         # Hard ceiling for any operation
+  minimum_safe: 100             # Minimum to ensure complete responses
+
+# Provider API Keys and Configuration
+# IMPORTANT: All models must include provider prefixes (e.g., 'groq/model-name')
+providers:
+  gemini:
+    api_key: "your-gemini-api-key-here"
+    
+  openai:
+    api_key: "your-openai-api-key-here"
+    
+  anthropic:
+    api_key: "your-anthropic-api-key-here"
+    
+  openrouter:
+    api_key: "your-openrouter-api-key-here"
+    base_url: "https://openrouter.ai/api/v1"
+    
+  groq:
+    api_key: "your-groq-api-key-here"
+
+  ollama:
+    base_url: "http://localhost:11434"
+    api_key: "Local"  # Local - no API key needed
+
+# Tool configurations
+tools:
+  tavily:
+    api_key: "your-tavily-api-key-here"
+    enabled: true
+  e2b:
+    api_key: "your-e2b-api-key-here"
+    enabled: false
+
+# Memory system configuration
+memory:
+  vector_store: "qdrant"
+  intelligent_filtering:
+    enabled: true
+    storage_threshold: 0.5
+    auto_type_detection: true
+    use_ai_analysis: true
+
+# TransformersService configuration for local AI processing
+transformers:
+  # Core models for local processing
+  models:
+    memory_classifier: "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
+    intent_classifier: "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
+    sentiment_analyzer: "cardiffnlp/twitter-roberta-base-sentiment-latest"
+    entity_extractor: "dbmdz/bert-large-cased-finetuned-conll03-english"
+    summarizer: "facebook/bart-large-cnn"
+    embedder: "sentence-transformers/all-MiniLM-L6-v2"
+  
+  # Performance configuration
+  performance:
+    cache_size: 1000              # LRU cache size for each model
+    device: "auto"                # "auto", "cpu", "cuda", or device number
+    max_length: 512               # Maximum input token length
+    batch_size: 1                 # Batch size for processing
+  
+  # Fallback configuration
+  fallback:
+    enabled: true                 # Enable fallback to LLM when transformers fail
+    confidence_threshold: 0.3     # Minimum confidence for transformer results
+    use_keyword_fallback: true    # Use keyword matching as final fallback
+
+# Consolidated timeout configurations
+timeouts:
+  api_calls: 60                   # Standard API timeout
+  database_operations: 20         # Database connection timeout
+  local_model_loading: 30         # Local model initialization timeout
+  websocket_connections: 10       # WebSocket timeout
+
+# Database configurations (consolidated)
+databases:
+  redis:
+    host: "localhost"
+    port: 6379
+    db: 0
+    password: null
+    max_connections: 20
+    default_ttl: 604800
+    max_working_items: 7
+  qdrant:
+    host: "localhost"
+    port: 6333
+    grpc_port: 6334
+    prefer_grpc: false
+    collection_name: "agent_memories"
+    vector_size: 384
+    similarity_threshold: 0.7
+
+# Agent behavior configuration
+agent:
+  reasoning_interval_seconds: 60
+  max_thoughts_per_cycle: 10
+  cognitive_load_threshold: 0.8
+  decision_confidence_threshold: 0.8
+  auto_learning_enabled: true
+  reasoning:
+    system_message: "You are an advanced autonomous AI assistant with continuous reasoning capabilities. You learn from every interaction and proactively help users achieve their goals."
+
+# Autonomous Agent Configuration
+autonomous:
+  thinking_interval_seconds: 1800
+  enable_background_thinking: true
+  expert_team:
+    default_analysis_type: "full_collaboration"
+    consultation_timeout_seconds: 300
+    enable_proactive_insights: true
+
+# Performance optimization settings
+performance:
+  cache_size: 1000
+  cache_ttl: 3600
+  max_connections: 10
+  rate_limit: 100
+  batch_timeout: 1.0
+  max_batch_size: 10
+  fallback_chain: ["groq", "openrouter", "gemini", "openai", "ollama"]
+
+# Development settings
+development:
+  debug_mode: true
+  verbose_logging: true
+  monitoring_enabled: false
+  metrics_collection: false
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "./data/logs/agent.log"

@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # Main AI Agent Backend
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      - REDIS_URL=redis://localhost:6379
+      - QDRANT_URL=http://localhost:6333
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DEBUG=${DEBUG:-true}
+    volumes:
+      - ./data:/app/data
+      - ./backend:/app
+      - ./backend/config:/app/config
+    depends_on:
+      - redis
+      - qdrant
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Next.js Frontend Dashboard  
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+      - NODE_ENV=${NODE_ENV:-development}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Redis for working memory and message queuing
+  redis:
+    image: redis:7-alpine
+    network_mode: host
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --port 6379
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Qdrant for long-term vector memory storage
+  qdrant:
+    image: qdrant/qdrant:latest
+    network_mode: host
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# PostgreSQL and LanceDB removed - using Redis + Qdrant architecture
