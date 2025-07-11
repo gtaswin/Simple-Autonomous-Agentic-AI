@@ -1,5 +1,4 @@
-# ⚡ Simple Autonomous Agentic AI System
-
+# ⚡ Simple Autonomous Agentic AI System [CAUTION: Under Development]
 **The Future of Proactive AI Assistance** - A sophisticated 3-agent autonomous system with continuous intelligence, life event planning, and real-time collaboration.
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
