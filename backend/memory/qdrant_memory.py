@@ -4,12 +4,11 @@ Handles persistent memory storage with vector embeddings
 """
 
 import asyncio
-import json
 import logging
 import uuid
 from datetime import datetime
 from typing import List, Dict, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 try:
     from qdrant_client import QdrantClient
@@ -31,7 +30,7 @@ except ImportError:
     print("❌ Install with: pip install sentence-transformers")
     exit(1)
 
-from .memory_types import MemoryTrace, MemoryType, MemoryPriority
+from .autonomous_memory import MemoryTrace, MemoryType, MemoryPriority
 
 @dataclass
 class QdrantMemoryItem:
@@ -39,7 +38,7 @@ class QdrantMemoryItem:
     id: str
     content: str
     memory_type: str
-    user_id: str
+    user_name: str
     timestamp: datetime
     importance: float
     tags: List[str]
@@ -55,8 +54,9 @@ class QdrantMemoryItem:
             payload={
                 "content": self.content,
                 "memory_type": self.memory_type,
-                "user_id": self.user_id,
-                "timestamp": self.timestamp.isoformat(),
+                "user_name": self.user_name,
+                "timestamp": self.timestamp.timestamp(),  # Store as numeric timestamp for filtering
+                "timestamp_iso": self.timestamp.isoformat(),  # Keep ISO format for readability
                 "importance": self.importance,
                 "tags": self.tags,
                 "concepts": self.concepts,
@@ -68,12 +68,20 @@ class QdrantMemoryItem:
     def from_point(cls, point: dict) -> 'QdrantMemoryItem':
         """Create from Qdrant point"""
         payload = point.get("payload", {})
+        # Handle both old ISO format and new timestamp format for backward compatibility
+        if "timestamp_iso" in payload:
+            timestamp = datetime.fromisoformat(payload["timestamp_iso"])
+        elif isinstance(payload["timestamp"], str):
+            timestamp = datetime.fromisoformat(payload["timestamp"])
+        else:
+            timestamp = datetime.fromtimestamp(payload["timestamp"])
+            
         return cls(
             id=point["id"],
             content=payload["content"],
             memory_type=payload["memory_type"],
-            user_id=payload["user_id"],
-            timestamp=datetime.fromisoformat(payload["timestamp"]),
+            user_name=payload["user_name"],
+            timestamp=timestamp,
             importance=payload["importance"],
             tags=payload.get("tags", []),
             concepts=payload.get("concepts", []),
@@ -88,76 +96,31 @@ class QdrantMemoryLayer:
         self.config = config
         self.logger = logging.getLogger(__name__)
         
-        # Qdrant configuration (consolidated)
+        # Qdrant configuration (simplified)
         qdrant_config = config.get("databases.qdrant", {})
         if not qdrant_config:
             raise ValueError("❌ CONFIGURATION ERROR: 'databases.qdrant' not found in settings.yaml")
         
-        self.host = qdrant_config.get("host")
-        if not self.host:
-            raise ValueError("❌ CONFIGURATION ERROR: 'databases.qdrant.host' not found in settings.yaml")
-        
-        self.port = qdrant_config.get("port")
-        if not self.port:
-            raise ValueError("❌ CONFIGURATION ERROR: 'databases.qdrant.port' not found in settings.yaml")
-        
-        # gRPC configuration
-        self.grpc_port = qdrant_config.get("grpc_port", 6334)
-        self.prefer_grpc = qdrant_config.get("prefer_grpc", False)
-        
-        self.collection_name = qdrant_config.get("collection_name")
-        if not self.collection_name:
-            raise ValueError("❌ CONFIGURATION ERROR: 'databases.qdrant.collection_name' not found in settings.yaml")
-        
-        # Use consolidated timeout configuration
-        self.timeout = self.config.get("timeouts.database_operations")
-        if not self.timeout:
-            raise ValueError("❌ CONFIGURATION ERROR: 'timeouts.database_operations' not found in settings.yaml")
+        # Essential fields only
+        self.host = qdrant_config["host"]
+        self.port = qdrant_config["port"]
+        self.collection_name = qdrant_config["collection_name"]
+        self.vector_size = qdrant_config["vector_size"]
+        self.similarity_threshold = qdrant_config.get("similarity_threshold", 0.7)
         
         # Initialize clients
         self.client = None
         self.embedding_model = None
         
-        # Memory configuration (from consolidated config)
-        self.vector_size = qdrant_config.get("vector_size")
-        if not self.vector_size:
-            raise ValueError("❌ CONFIGURATION ERROR: 'databases.qdrant.vector_size' not found in settings.yaml")
-        
-        self.similarity_threshold = qdrant_config.get("similarity_threshold")
-        if not self.similarity_threshold:
-            raise ValueError("❌ CONFIGURATION ERROR: 'databases.qdrant.similarity_threshold' not found in settings.yaml")
-        
     async def connect(self):
         """Initialize Qdrant connection and embedding model"""
         try:
-            # Initialize Qdrant client with gRPC support
-            if self.prefer_grpc:
-                try:
-                    # Try gRPC connection first
-                    self.client = QdrantClient(
-                        host=self.host,
-                        grpc_port=self.grpc_port,
-                        prefer_grpc=True,
-                        timeout=self.timeout
-                    )
-                    self.logger.info(f"✅ Qdrant connected via gRPC on port {self.grpc_port}")
-                except Exception as grpc_error:
-                    # Fall back to HTTP if gRPC fails
-                    self.logger.warning(f"⚠️ gRPC connection failed, falling back to HTTP: {grpc_error}")
-                    self.client = QdrantClient(
-                        host=self.host,
-                        port=self.port,
-                        timeout=self.timeout
-                    )
-                    self.logger.info(f"✅ Qdrant connected via HTTP on port {self.port}")
-            else:
-                # Use HTTP connection
-                self.client = QdrantClient(
-                    host=self.host,
-                    port=self.port,
-                    timeout=self.timeout
-                )
-                self.logger.info(f"✅ Qdrant connected via HTTP on port {self.port}")
+            # Initialize Qdrant client (HTTP connection only)
+            self.client = QdrantClient(
+                host=self.host,
+                port=self.port
+            )
+            self.logger.info(f"✅ Qdrant connected via HTTP on port {self.port}")
             
             # Test connection
             collections = self.client.get_collections()
@@ -218,7 +181,7 @@ class QdrantMemoryLayer:
                 id=memory.id,
                 content=memory.content,
                 memory_type=memory.memory_type.value,
-                user_id=memory.user_id,
+                user_name=memory.user_name,
                 timestamp=memory.created_at,
                 importance=memory.importance_score,
                 tags=list(memory.tags),
@@ -244,7 +207,7 @@ class QdrantMemoryLayer:
         self, 
         query: str, 
         memory_types: List[MemoryType] = None,
-        user_id: str = "default",
+        user_name: str = "John",
         limit: int = 10,
         min_similarity: float = None
     ) -> List[QdrantMemoryItem]:
@@ -256,8 +219,8 @@ class QdrantMemoryLayer:
             # Build filter conditions
             filter_conditions = [
                 FieldCondition(
-                    key="user_id",
-                    match=models.MatchValue(value=user_id)
+                    key="user_name",
+                    match=models.MatchValue(value=user_name)
                 )
             ]
             
@@ -269,6 +232,13 @@ class QdrantMemoryLayer:
                     )
                 )
             
+            # Filter out expired memories (only return non-expired or critical memories)
+            current_time = datetime.now().timestamp()  # Use timestamp for numeric comparison
+            
+            # Add expiration filter - memories with future expiration dates
+            # Note: We'll filter at application level since Qdrant stores ISO strings
+            # TODO: Store timestamps as numbers for better Qdrant filtering
+            
             # Search with vector similarity
             search_results = self.client.search(
                 collection_name=self.collection_name,
@@ -278,10 +248,25 @@ class QdrantMemoryLayer:
                 score_threshold=min_similarity or self.similarity_threshold
             )
             
-            # Convert to QdrantMemoryItem objects
+            # Convert to QdrantMemoryItem objects and filter expired memories
             memories = []
+            current_time_dt = datetime.now()
+            
             for result in search_results:
                 try:
+                    # Check expiration at application level
+                    expires_at_str = result.payload.get('expires_at')
+                    
+                    # Skip if expired (unless it's a critical memory with far-future date)
+                    if expires_at_str and expires_at_str != "3000-01-01T00:00:00":
+                        try:
+                            expires_at = datetime.fromisoformat(expires_at_str.replace('Z', ''))
+                            if current_time_dt > expires_at:
+                                continue  # Skip expired memory
+                        except (ValueError, AttributeError):
+                            # If we can't parse the date, keep the memory (safer approach)
+                            pass
+                    
                     memory_item = QdrantMemoryItem.from_point({
                         "id": result.id,
                         "vector": result.vector,
@@ -302,15 +287,15 @@ class QdrantMemoryLayer:
     async def get_memories_by_type(
         self, 
         memory_type: MemoryType, 
-        user_id: str = "default",
+        user_name: str = "John",
         limit: int = 100
     ) -> List[QdrantMemoryItem]:
         """Get all memories of a specific type"""
         try:
             filter_conditions = [
                 FieldCondition(
-                    key="user_id",
-                    match=models.MatchValue(value=user_id)
+                    key="user_name",
+                    match=models.MatchValue(value=user_name)
                 ),
                 FieldCondition(
                     key="memory_type",
@@ -374,7 +359,7 @@ class QdrantMemoryLayer:
             self.logger.error(f"Failed to delete memory: {e}")
             return False
     
-    async def get_memory_stats(self, user_id: str = "default") -> Dict[str, Any]:
+    async def get_memory_stats(self, user_name: str = "John") -> Dict[str, Any]:
         """Get Qdrant memory statistics"""
         try:
             # Get collection info
@@ -383,7 +368,7 @@ class QdrantMemoryLayer:
             # Count memories by type for user
             type_counts = {}
             for memory_type in MemoryType:
-                memories = await self.get_memories_by_type(memory_type, user_id, limit=1000)
+                memories = await self.get_memories_by_type(memory_type, user_name, limit=1000)
                 type_counts[memory_type.value] = len(memories)
             
             return {
@@ -412,7 +397,7 @@ class QdrantMemoryLayer:
                 "target_collection": self.collection_name,
                 "points_count": collection_info.points_count,
                 "vector_size": collection_info.config.params.vectors.size,
-                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
+                "embedding_model": self.config.get("transformers.models.embedder", "unknown")
             }
             
         except Exception as e:
@@ -421,3 +406,64 @@ class QdrantMemoryLayer:
                 "connection": "failed",
                 "error": str(e)
             }
+    
+    async def get_recent_memories(self, user_name: str, since_date: datetime) -> List[QdrantMemoryItem]:
+        """Get memories since a specific date"""
+        try:
+            from qdrant_client.models import Filter, FieldCondition, Range, DatetimeRange
+            
+            # Convert datetime to timestamp for filtering
+            since_timestamp = since_date.timestamp()
+            
+            # Create filter for user and date range
+            search_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="user_name",
+                        match={"value": user_name}
+                    ),
+                    FieldCondition(
+                        key="timestamp",
+                        range=Range(gte=since_timestamp)
+                    )
+                ]
+            )
+            
+            # Search for memories within date range
+            results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=[0.0] * self.vector_size,  # Dummy vector
+                query_filter=search_filter,
+                limit=1000,  # Get up to 1000 recent memories
+                with_payload=True
+            )
+            
+            recent_memories = []
+            for result in results:
+                payload = result.payload
+                memory_item = QdrantMemoryItem(
+                    id=str(result.id),
+                    content=payload.get("content", ""),
+                    memory_type=payload.get("memory_type", "long_term"),
+                    user_name=payload.get("user_name", user_name),
+                    timestamp=datetime.fromtimestamp(payload.get("timestamp", 0)) if isinstance(payload.get("timestamp"), (int, float)) else datetime.fromisoformat(payload.get("timestamp", datetime.now().isoformat())),
+                    embedding=result.vector if hasattr(result, 'vector') else [],
+                    tags=payload.get("tags", []),
+                    concepts=payload.get("concepts", []),
+                    entities=payload.get("entities", []),
+                    importance=payload.get("importance", 0.5)
+                )
+                recent_memories.append(memory_item)
+            
+            # Sort by timestamp (most recent first)
+            recent_memories.sort(key=lambda x: x.timestamp, reverse=True)
+            
+            return recent_memories
+            
+        except Exception as e:
+            self.logger.error(f"Error getting recent memories from Qdrant: {e}")
+            return []
+    
+    # No cleanup method needed - Qdrant is permanent storage
+    # Legacy cleanup methods removed (get_all_user_memories, get_all_memories, delete_memory)  
+    # Redis Stack handles TTL natively, no manual cleanup needed

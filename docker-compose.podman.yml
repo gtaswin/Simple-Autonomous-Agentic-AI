@@ -13,14 +13,11 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
-      - POSTGRES_URL=postgresql://postgres:password@postgres:5432/agent_db
-      - LANCEDB_URI=./data/memory.lance
+      - QDRANT_URL=http://qdrant:6333
       - OPENAI_API_KEY=${OPENAI_API_KEY:-demo}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-demo}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-demo}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-demo}
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-demo}
-      - E2B_API_KEY=${E2B_API_KEY:-demo}
+      - GROQ_API_KEY=${GROQ_API_KEY:-demo}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.containers.internal:11434}
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - DEBUG=${DEBUG:-true}
@@ -30,7 +27,7 @@ services:
       - ./backend/config:/app/config
     depends_on:
       - redis
-      - postgres
+      - qdrant
     restart: unless-stopped
 
   # Next.js Frontend Dashboard  
@@ -52,46 +49,30 @@ services:
       - backend
     restart: unless-stopped
 
-  # Redis for caching and message queuing
+  # Redis Stack for working memory + short-term vector memory with TTL
   redis:
-    image: redis:7-alpine
+    image: redis/redis-stack:latest
     ports:
-      - "6379:6379"
+      - "6379:6379"  # Redis port
+      - "8001:8001"  # RedisInsight web UI
     volumes:
       - ./data/redis:/data
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    environment:
+      - REDIS_ARGS=--appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+      - REDISEARCH_ARGS=
+      - REDISJSON_ARGS=
     restart: unless-stopped
 
-  # PostgreSQL for structured data storage
-  postgres:
-    image: postgres:15-alpine
+  # Qdrant for long-term vector memory storage
+  qdrant:
+    image: qdrant/qdrant:latest
     ports:
-      - "5432:5432"
+      - "6333:6333"  # HTTP API
+      - "6334:6334"  # gRPC API
     environment:
-      - POSTGRES_DB=agent_db
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_HOST_AUTH_METHOD=trust
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__LOG_LEVEL=INFO
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-      - ./backend/database/init.sql:/docker-entrypoint-initdb.d/init.sql
-    restart: unless-stopped
-
-  # LanceDB Vector Database Service
-  lancedb:
-    image: python:3.12-slim
-    ports:
-      - "8001:8001"
-    working_dir: /app
-    environment:
-      - LANCEDB_PORT=8001
-      - LANCEDB_DATA_DIR=/app/data/lancedb
-    volumes:
-      - ./data/lancedb:/app/data/lancedb
-      - ./backend/database/lancedb_server.py:/app/server.py
-    command: |
-      sh -c "
-        pip install lancedb fastapi uvicorn pandas pyarrow &&
-        python server.py
-      "
+      - ./data/qdrant:/qdrant/storage
     restart: unless-stopped

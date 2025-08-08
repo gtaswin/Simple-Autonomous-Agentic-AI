@@ -114,6 +114,10 @@ docker-compose.override.yml
 # Qdrant
 qdrant_storage/
 
+# Transformer Models Cache
+backend/.models/
+backend/models/
+
 # Spyder project settings
 .spyderproject
 .spyproject

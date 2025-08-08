@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 # Import safe JSON serialization
 from utils.serialization import safe_json_dumps
@@ -22,25 +22,6 @@ except ImportError:
     print("❌ Install with: pip install redis")
     exit(1)
 
-@dataclass
-class WorkingMemoryItem:
-    """Working memory item with metadata"""
-    content: str
-    user_id: str
-    session_id: str
-    memory_type: str
-    timestamp: datetime
-    importance: float = 0.5
-    
-    def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        data['timestamp'] = self.timestamp.isoformat()
-        return data
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'WorkingMemoryItem':
-        data['timestamp'] = datetime.fromisoformat(data['timestamp'])
-        return cls(**data)
 
 class RedisMemoryLayer:
     """Redis-based working memory with activity-based TTL"""
@@ -69,16 +50,11 @@ class RedisMemoryLayer:
         
         self.password = redis_config.get("password")
         
-        # Working memory configuration (from consolidated config)
-        self.max_items = redis_config.get("max_working_items")
-        if not self.max_items:
-            raise ValueError("❌ CONFIGURATION ERROR: 'databases.redis.max_working_items' not found in settings.yaml")
-        
-        self.default_ttl = redis_config.get("default_ttl")
-        if not self.default_ttl:
-            raise ValueError("❌ CONFIGURATION ERROR: 'databases.redis.default_ttl' not found in settings.yaml")
-        
-        self.activity_extension = 86400  # Extend TTL by 1 day on access
+        # Memory control configuration (unified system)
+        self.max_items = config.get_memory_limit("working_memory")
+        self.working_memory_ttl = config.get_memory_ttl("working_memory")
+        self.activity_extension = config.get_memory_ttl("activity_extension")
+        self.session_limit = config.get_memory_limit("session")
         
     async def connect(self):
         """Initialize Redis connection"""
@@ -106,267 +82,6 @@ class RedisMemoryLayer:
         if self.redis:
             await self.redis.close()
             self.logger.info("Redis connection closed")
-    
-    async def store_working_memory(self, content: str, user_id: str, session_id: str, memory_type: str = "working") -> bool:
-        """Store item in working memory with activity-based TTL"""
-        try:
-            # Redis is required for autonomous agent memory
-            if not self.redis:
-                raise RuntimeError("❌ CRITICAL ERROR: Redis is required for autonomous agent memory! Ensure Redis is running and connected.")
-                
-            # Create memory item
-            item = WorkingMemoryItem(
-                content=content,
-                user_id=user_id,
-                session_id=session_id,
-                memory_type=memory_type,
-                timestamp=datetime.now()
-            )
-            
-            # Redis key for user's working memory
-            key = f"working_memory:{user_id}"
-            
-            # Store as JSON in Redis list using safe serialization
-            item_json = safe_json_dumps(item.to_dict())
-            
-            # Add to beginning of list (most recent first)
-            await self.redis.lpush(key, item_json)
-            
-            # Trim to keep only max_items
-            await self.redis.ltrim(key, 0, self.max_items - 1)
-            
-            # Set/extend TTL with activity-based extension
-            await self.redis.expire(key, self.default_ttl)
-            
-            # Memory stored successfully
-            return True
-            
-        except Exception as e:
-            print(f"❌ Redis: Failed to store working memory: {e}")
-            self.logger.error(f"Failed to store working memory: {e}")
-            return False
-    
-    async def get_working_memory(self, user_id: str, limit: Optional[int] = None) -> List[WorkingMemoryItem]:
-        """Retrieve working memory items for user"""
-        try:
-            key = f"working_memory:{user_id}"
-            
-            # Extend TTL on access (activity-based)
-            await self.redis.expire(key, self.default_ttl)
-            
-            # Get items from Redis list
-            limit = limit or self.max_items
-            items_json = await self.redis.lrange(key, 0, limit - 1)
-            
-            # Parse JSON items
-            items = []
-            for item_json in items_json:
-                try:
-                    item_data = json.loads(item_json)
-                    item = WorkingMemoryItem.from_dict(item_data)
-                    items.append(item)
-                except Exception as e:
-                    self.logger.warning(f"Failed to parse working memory item: {e}")
-                    continue
-            
-            # Memory retrieved successfully
-            return items
-            
-        except Exception as e:
-            print(f"❌ Redis: Failed to retrieve working memory: {e}")
-            self.logger.error(f"Failed to retrieve working memory: {e}")
-            return []
-    
-    async def clear_working_memory(self, user_id: str) -> bool:
-        """Clear working memory for user"""
-        try:
-            key = f"working_memory:{user_id}"
-            await self.redis.delete(key)
-            self.logger.info(f"Cleared working memory for {user_id}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to clear working memory: {e}")
-            return False
-    
-    async def get_memory_stats(self, user_id: str) -> Dict[str, Any]:
-        """Get working memory statistics"""
-        try:
-            key = f"working_memory:{user_id}"
-            
-            # Get list length and TTL
-            length = await self.redis.llen(key)
-            ttl = await self.redis.ttl(key)
-            
-            # Get oldest and newest timestamps
-            items = await self.get_working_memory(user_id)
-            
-            stats = {
-                "total_items": length,
-                "ttl_seconds": ttl,
-                "ttl_days": round(ttl / 86400, 1) if ttl > 0 else 0,
-                "oldest_item": items[-1].timestamp.isoformat() if items else None,
-                "newest_item": items[0].timestamp.isoformat() if items else None,
-                "memory_span_hours": 0
-            }
-            
-            if len(items) >= 2:
-                span = items[0].timestamp - items[-1].timestamp
-                stats["memory_span_hours"] = round(span.total_seconds() / 3600, 1)
-            
-            return stats
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get memory stats: {e}")
-            return {}
-    
-    # ========================================
-    # SINGLE SESSION CHAT CONVERSATION METHODS
-    # ========================================
-    
-    async def store_chat_message(self, user_id: str, message: str, sender: str = "user", metadata: Dict[str, Any] = None, session_id: Optional[str] = None) -> bool:
-        """Store chat message in single session conversation (session_id ignored for single-user system)"""
-        try:
-            # Redis is required for autonomous agent memory
-            if not self.redis:
-                raise RuntimeError("❌ CRITICAL ERROR: Redis is required for autonomous agent memory! Ensure Redis is running and connected.")
-                
-            # Create chat message item
-            chat_item = {
-                "message": message,
-                "sender": sender,  # "user" or "assistant"
-                "timestamp": datetime.now().isoformat(),
-                "metadata": metadata or {}
-            }
-            
-            # Single chat conversation key
-            key = f"chat_conversation:{user_id}"
-            
-            # Store as JSON in Redis list (chronological order) using safe serialization
-            item_json = safe_json_dumps(chat_item)
-            await self.redis.rpush(key, item_json)
-            
-            # Set TTL to prevent indefinite storage (extend on activity)
-            await self.redis.expire(key, 86400 * 7)  # 7 days TTL
-            
-            # Chat message stored
-            return True
-            
-        except Exception as e:
-            print(f"❌ Redis: Failed to store chat message: {e}")
-            self.logger.error(f"Failed to store chat message: {e}")
-            return False
-    
-    async def get_chat_history(self, user_id: str, limit: Optional[int] = None, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Get chat conversation history for user (session_id ignored for single-user system)"""
-        try:
-            # Redis is required for autonomous agent memory
-            if not self.redis:
-                raise RuntimeError("❌ CRITICAL ERROR: Redis is required for autonomous agent memory! Ensure Redis is running and connected.")
-                
-            key = f"chat_conversation:{user_id}"
-            
-            # Extend TTL on access (activity-based)
-            await self.redis.expire(key, 86400 * 7)
-            
-            # Get messages from Redis list
-            if limit:
-                # Get last N messages
-                items_json = await self.redis.lrange(key, -limit, -1)
-            else:
-                # Get all messages
-                items_json = await self.redis.lrange(key, 0, -1)
-            
-            # Parse JSON items
-            messages = []
-            for item_json in items_json:
-                try:
-                    message_data = json.loads(item_json)
-                    messages.append(message_data)
-                except Exception as e:
-                    self.logger.warning(f"Failed to parse chat message: {e}")
-                    continue
-            
-            # Chat history retrieved
-            return messages
-            
-        except Exception as e:
-            print(f"❌ Redis: Failed to retrieve chat history: {e}")
-            self.logger.error(f"Failed to retrieve chat history: {e}")
-            return []
-    
-    async def clear_chat_conversation(self, user_id: str) -> bool:
-        """Clear entire chat conversation for user (Reset Chat)"""
-        try:
-            key = f"chat_conversation:{user_id}"
-            await self.redis.delete(key)
-            self.logger.info(f"Cleared chat conversation for {user_id}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to clear chat conversation: {e}")
-            return False
-    
-    async def get_chat_stats(self, user_id: str) -> Dict[str, Any]:
-        """Get chat conversation statistics"""
-        try:
-            key = f"chat_conversation:{user_id}"
-            
-            # Get conversation length and TTL
-            length = await self.redis.llen(key)
-            ttl = await self.redis.ttl(key)
-            
-            # Get first and last messages
-            messages = await self.get_chat_history(user_id)
-            
-            stats = {
-                "total_messages": length,
-                "user_messages": len([m for m in messages if m.get("sender") == "user"]),
-                "assistant_messages": len([m for m in messages if m.get("sender") == "assistant"]),
-                "ttl_seconds": ttl,
-                "ttl_days": round(ttl / 86400, 1) if ttl > 0 else 0,
-                "first_message": messages[0]["timestamp"] if messages else None,
-                "last_message": messages[-1]["timestamp"] if messages else None,
-                "conversation_span_hours": 0
-            }
-            
-            if len(messages) >= 2:
-                from datetime import datetime
-                first_time = datetime.fromisoformat(messages[0]["timestamp"])
-                last_time = datetime.fromisoformat(messages[-1]["timestamp"])
-                span = last_time - first_time
-                stats["conversation_span_hours"] = round(span.total_seconds() / 3600, 1)
-            
-            return stats
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get chat stats: {e}")
-            return {}
-
-    async def cleanup_expired_memory(self) -> int:
-        """Clean up expired working memory keys"""
-        try:
-            # Find all working memory keys
-            keys = await self.redis.keys("working_memory:*")
-            
-            cleaned = 0
-            for key in keys:
-                ttl = await self.redis.ttl(key)
-                if ttl == -2:  # Key expired/doesn't exist
-                    await self.redis.delete(key)
-                    cleaned += 1
-                elif ttl == -1:  # Key exists but no TTL set
-                    # Reset TTL for keys without expiration
-                    await self.redis.expire(key, self.default_ttl)
-            
-            if cleaned > 0:
-                self.logger.info(f"Cleaned up {cleaned} expired working memory keys")
-            
-            return cleaned
-            
-        except Exception as e:
-            self.logger.error(f"Failed to cleanup expired memory: {e}")
-            return 0
     
     async def health_check(self) -> Dict[str, Any]:
         """Check Redis health and return status"""
@@ -396,3 +111,214 @@ class RedisMemoryLayer:
                 "connection": "failed",
                 "error": str(e)
             }
+    
+    
+    # ========================================
+    # NEW: 3-TIER MEMORY SYSTEM SUPPORT
+    # ========================================
+    
+    async def get_working_memory_by_key(self, key: str, limit: int = 7) -> List[Dict]:
+        """Get working memory items by specific key (for per-agent per-user)"""
+        try:
+            if not self.redis:
+                return []
+            
+            # Get items from Redis list (newest first)
+            items_data = await self.redis.lrange(key, 0, limit - 1)
+            
+            items = []
+            for item_data in items_data:
+                try:
+                    item = json.loads(item_data)
+                    items.append(item)
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"Failed to parse working memory item: {e}")
+                    continue
+            
+            return items
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get working memory by key {key}: {e}")
+            return []
+    
+    async def store_working_memory_by_key(self, key: str, content: str, metadata: Dict[str, Any] = None) -> str:
+        """Store working memory item by specific key (for per-agent per-user)"""
+        try:
+            if not self.redis:
+                raise RuntimeError("Redis not connected")
+            
+            # Create memory item
+            memory_item = {
+                "content": content,
+                "metadata": metadata or {},
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Store in Redis list (newest at front)
+            item_json = safe_json_dumps(memory_item)
+            await self.redis.lpush(key, item_json)
+            
+            # Maintain configured item limit (trim excess)
+            await self.redis.ltrim(key, 0, self.max_items - 1)
+            
+            # Set TTL for automatic cleanup (7 days)
+            await self.redis.expire(key, self.working_memory_ttl)
+            
+            return f"{key}:item_{int(datetime.now().timestamp())}"
+            
+        except Exception as e:
+            self.logger.error(f"Failed to store working memory by key {key}: {e}")
+            raise
+    
+    async def clear_working_memory_by_key(self, key: str) -> bool:
+        """Clear working memory by specific key"""
+        try:
+            if not self.redis:
+                return False
+            
+            result = await self.redis.delete(key)
+            return result > 0
+            
+        except Exception as e:
+            self.logger.error(f"Failed to clear working memory by key {key}: {e}")
+            return False
+    
+    async def store_session_conversation(self, key: str, conversation: Dict[str, Any], max_conversations: int = None) -> str:
+        """Store complete conversation in session memory"""
+        try:
+            if not self.redis:
+                raise RuntimeError("Redis not connected")
+            
+            # Store conversation in Redis list
+            conversation_json = safe_json_dumps(conversation)
+            await self.redis.lpush(key, conversation_json)
+            
+            # Maintain conversation limit
+            limit = max_conversations or self.session_limit
+            await self.redis.ltrim(key, 0, limit - 1)
+            
+            # No TTL for session memory (persists until manual cleanup)
+            
+            return f"{key}:conversation_{int(datetime.now().timestamp())}"
+            
+        except Exception as e:
+            self.logger.error(f"Failed to store session conversation: {e}")
+            raise
+    
+    async def get_session_conversations(self, key: str, limit: int = None) -> List[Dict]:
+        """Get session conversations by key in chronological order (oldest first)"""
+        try:
+            if not self.redis:
+                return []
+            
+            # Get conversations from Redis list (newest first from lpush)
+            actual_limit = limit or self.session_limit
+            conversations_data = await self.redis.lrange(key, 0, actual_limit - 1)
+            
+            conversations = []
+            for conv_data in conversations_data:
+                try:
+                    conversation = json.loads(conv_data)
+                    conversations.append(conversation)
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"Failed to parse session conversation: {e}")
+                    continue
+            
+            # Reverse to get chronological order (oldest first)
+            return conversations[::-1]
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get session conversations: {e}")
+            return []
+    
+    async def clear_session_memory(self, key: str) -> bool:
+        """Clear session memory by key"""
+        try:
+            if not self.redis:
+                return False
+            
+            result = await self.redis.delete(key)
+            return result > 0
+            
+        except Exception as e:
+            self.logger.error(f"Failed to clear session memory by key {key}: {e}")
+            return False
+    
+    async def get_chat_history(self, user_id: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """Get chat history for API endpoint compatibility"""
+        try:
+            # Use session conversation method to get chat history
+            session_key = f"session_memory:{user_id}"
+            conversations = await self.get_session_conversations(session_key, limit=limit + offset)
+            
+            # Apply offset and limit
+            if offset > 0:
+                conversations = conversations[offset:]
+            if limit and len(conversations) > limit:
+                conversations = conversations[:limit]
+            
+            return conversations
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get chat history for {user_id}: {e}")
+            return []
+    
+    async def get_autonomous_insights(self, user_id: str) -> Dict[str, Any]:
+        """Get autonomous insights for API endpoint compatibility"""
+        try:
+            # Get insights from autonomous_insights pattern
+            insights_pattern = f"autonomous_insights:{user_id}:*"
+            
+            # Get all insight keys for the user
+            insight_keys = await self.redis.keys(insights_pattern)
+            
+            insights = {}
+            for key in insight_keys:
+                # Extract insight type from key
+                key_str = key.decode() if isinstance(key, bytes) else key
+                insight_type = key_str.split(':')[-1]  # Get last part after ':'
+                
+                # Get insight data as hash (insights are stored as Redis hashes)
+                insight_data = await self.redis.hgetall(key)
+                if insight_data:
+                    # Convert Redis hash to dict with proper JSON parsing
+                    parsed_insight = {}
+                    for field, value in insight_data.items():
+                        field_str = field.decode() if isinstance(field, bytes) else field
+                        value_str = value.decode() if isinstance(value, bytes) else value
+                        
+                        # Try to parse JSON values
+                        try:
+                            import json
+                            parsed_insight[field_str] = json.loads(value_str)
+                        except (json.JSONDecodeError, ValueError):
+                            parsed_insight[field_str] = value_str
+                    
+                    insights[insight_type] = parsed_insight
+            
+            return insights
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get autonomous insights for {user_id}: {e}")
+            return {}
+    
+    async def clear_autonomous_insights(self, user_id: str) -> Dict[str, Any]:
+        """Clear autonomous insights for API endpoint compatibility"""
+        try:
+            # Get all insight keys for the user
+            insights_pattern = f"autonomous_insights:{user_id}:*"
+            insight_keys = await self.redis.keys(insights_pattern)
+            
+            # Delete all insights
+            if insight_keys:
+                deleted_count = await self.redis.delete(*insight_keys)
+                return {
+                    "deleted_insights": deleted_count,
+                    "insight_types_cleared": [key.decode().split(':')[-1] if isinstance(key, bytes) else key.split(':')[-1] for key in insight_keys]
+                }
+            else:
+                return {"deleted_insights": 0, "insight_types_cleared": []}
+                
+        except Exception as e:
+            self.logger.error(f"Failed to clear autonomous insights for {user_id}: {e}")
+            return {"deleted_insights": 0, "insight_types_cleared": [], "error": str(e)}

@@ -85,14 +85,14 @@ def _clean_for_json(obj: Any) -> Any:
         return str(obj)
 
 
-def prepare_websocket_message(message_type: str, data: Any, user_id: str = None) -> Dict[str, Any]:
+def prepare_websocket_message(message_type: str, data: Any, user_name: str = None) -> Dict[str, Any]:
     """
     Prepare a standardized WebSocket message with proper serialization.
     
     Args:
         message_type: Type of message (e.g., "thought", "decision", "status")
         data: Message payload
-        user_id: Optional user ID
+        user_name: Optional user name
         
     Returns:
         Dictionary ready for JSON serialization
@@ -103,15 +103,9 @@ def prepare_websocket_message(message_type: str, data: Any, user_id: str = None)
         "timestamp": datetime.now().isoformat()
     }
     
-    if user_id:
-        message["user_id"] = user_id
+    if user_name:
+        message["user_name"] = user_name
         
     return message
 
 
-def safe_serialize(data: Any) -> Any:
-    """
-    Safely serialize data for storage or transmission.
-    Similar to _clean_for_json but returns the cleaned object instead of JSON string.
-    """
-    return _clean_for_json(data)

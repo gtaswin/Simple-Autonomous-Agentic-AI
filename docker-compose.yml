@@ -45,13 +45,19 @@ services:
       - backend
     restart: unless-stopped
 
-  # Redis for working memory and message queuing
+  # Redis Stack for working memory, short-term vector memory with TTL
   redis:
-    image: redis:7-alpine
+    image: redis/redis-stack:latest
     network_mode: host
     volumes:
       - ./data/redis:/data
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --port 6379
+    environment:
+      - REDIS_ARGS=--appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru --port 6379
+      - REDISEARCH_ARGS=
+      - REDISJSON_ARGS=
+    ports:
+      - "6379:6379"  # Redis port
+      - "8001:8001"  # RedisInsight web UI
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "6379", "ping"]

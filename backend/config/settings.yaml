@@ -1,135 +1,238 @@
-# Autonomous Agentic AI System Configuration
-# 3-Agent Architecture: Memory + Research + Intelligence
+# 4-Agent Hybrid Architecture Configuration
+# Memory Reader (LOCAL) + Memory Writer (LOCAL) + Knowledge (LOCAL) + Organizer (EXTERNAL LLM)
 
-# System Configuration
-system:
-  default_user_id: "admin"
+# User Profile
+user:
+  name: "Aswin"
+  description: "DevOps Engineer living in India, interested in AI and cloud computing"
 
-# Model Categories - Working providers with proper model names
-model_categories:
-  # Fast operations (high frequency)
-  fast: ["groq/llama3-8b-8192", "gemini/gemini-1.5-flash", "anthropic/claude-3-haiku"]
-  
-  # Balanced operations (normal conversations)
-  balanced: ["groq/llama3-70b-8192", "gemini/gemini-1.5-flash", "anthropic/claude-3-haiku"]
-  
-  # Quality operations (complex reasoning)
-  quality: ["groq/llama3-70b-8192", "openrouter/deepseek/deepseek-r1", "anthropic/claude-3-sonnet"]
-  
-  # Premium operations (autonomous thinking)
-  premium: ["groq/llama3-70b-8192", "anthropic/claude-3-opus", "openai/gpt-4o"]
+# Autonomous Assistant Profile  
+assistant:
+  name: "Lalima"
+  description: "A personal assistant provides technical, personal support, advicer, helper, and reminder as day to day companion who always thinking about user."
 
-# Function to Category Mapping for Autonomous System
-ai_functions:
-  memory: "fast"                 # Memory operations
-  chat: "balanced"               # User conversations  
-  research: "quality"            # External research
-  reasoning: "quality"           # Complex analysis
-  autonomous: "premium"          # Autonomous thinking cycles
+# External LLM Models (ONLY for Organizer Agent)
+organizer_external_models:
+  - "groq/qwen/qwen3-32b"
+  - "gemini/gemini-1.5-pro"
+  - "gemini/gemini-1.5-flash"
+  - "anthropic/claude-3-sonnet-20240229" 
 
-# Token Limits Configuration
+
+# Model Settings (for Organizer Agent only)
+model_settings:
+  temperature: 0.7
+  max_tokens: 4096
+  timeout: 30
+
+# Token Limits (for Organizer Agent only)
 token_limits:
-  fast_operations: 4096
-  balanced_operations: 8192
-  quality_operations: 16384
-  premium_operations: 32768
-  absolute_maximum: 65536
+  absolute_maximum: 32768
 
-# Provider API Keys
+# LangGraph Orchestration Configuration
+langgraph:
+  checkpoint_storage: "memory"  # Memory-based checkpointing for state persistence
+  thread_timeout: 3600         # Thread timeout in seconds (1 hour)
+  max_concurrent_threads: 10   # Maximum concurrent workflow threads
+
+# API Providers (for Organizer Agent synthesis)
 providers:
   groq:
-    api_key: ""
-    
-  gemini:
-    api_key: ""
+    api_key: null
     
   anthropic:
-    api_key: ""
+    api_key: null  # Set your Anthropic API key here
     
   openai:
-    api_key: ""
+    api_key: null  # Set your OpenAI API key here
     
-  openrouter:
-    api_key: ""
-    base_url: "https://openrouter.ai/api/v1"
+  gemini:
+    api_key: null
 
-# Research Agent Configuration 
-research:
-  tavily_api_key: ""
-  enabled: true
-  max_results: 5
-  search_depth: "basic"
+# Search Tools Configuration
+search_tools:
+  wikipedia:
+    max_results: 4
+    timeout_seconds: 10
+    summary_sentences: 3
+    cache_enabled: true            # Enable Wikipedia result caching
+  wikidata:
+    max_results: 3
+    timeout_seconds: 8
+    cache_enabled: true            # Enable Wikidata result caching
 
-# Memory System Configuration
+# Hybrid Memory System Configuration
 memory:
   vector_store: "qdrant"
-  intelligent_filtering:
-    enabled: true
-    storage_threshold: 0.5
-    use_ai_analysis: true
 
-# Database Configurations
+# ===============================================
+# UNIFIED MEMORY TTL & ITEM CONTROL SYSTEM
+# ===============================================
+# Control all memory TTL and item limits from this central section
+
+memory_control:
+  # TTL Settings (Time To Live in seconds)
+  ttl:
+    # Short-term Memory (Redis Vector with automatic expiration)
+    short_term:
+      minimal: 86400      # 24 hours - for temporary context
+      short: 604800       # 7 days - for recent topics  
+      medium: 2592000     # 1 months (30 days) - for ongoing projects
+      extended: 7776000   # 3 months (90 days) - for important info
+      default: 86400      # 24 hours - fallback for unclassified
+    
+    # Working Memory (Redis Lists with agent-specific context)
+    working_memory: 604800  # 7 days - agent working context
+    activity_extension: 86400  # 1 day - extend TTL on access
+    
+    # Session Memory (Redis Lists with conversation history)
+    session: 0  # No TTL - persists until manual cleanup
+  
+  # Item Limits (Maximum number of items to store)
+  limits:
+    # Working Memory - per agent per user
+    working_memory_items: 7
+    
+    # Short-term Memory - per user (across all importance levels)
+    short_term_items: 100
+    
+    # Session Memory - conversation history
+    session_conversations: 50
+    
+    # Search Results
+    search_results_limit: 20
+  
+  # Importance thresholds for memory classification
+  importance_thresholds:
+    permanent: 0.9     # Core identity -> Long-term permanent
+    extended: 0.7      # Goals, projects -> Short-term extended TTL
+    medium: 0.5        # Recent interests -> Short-term medium TTL  
+    short: 0.3         # Context, states -> Short-term short TTL
+    minimal: 0.1       # Casual mentions -> Short-term minimal TTL
+  
+  # Universal Working Memory Compression (All Agents)
+  working_memory_compression:
+    enabled: true
+    compression_threshold: 200      # Compress items > 200 chars
+    target_length: 180             # Target compressed length
+    use_transformers: true         # Use local transformers for compression
+    fallback_to_truncation: true   # Fallback if transformers unavailable
+  
+  # Memory Deduplication System
+  deduplication:
+    enabled: true                   # Enable deduplication across all memory tiers
+    similarity_thresholds:
+      strict: 0.95                 # Nearly identical facts (99% similar)
+      high: 0.85                   # Very similar facts (personal info, preferences)
+      medium: 0.75                 # Moderately similar facts (general knowledge)
+      relaxed: 0.65                # Loosely similar facts (experimental)
+    default_threshold: 0.85         # Recommended threshold for most use cases
+    cross_tier_deduplication: true  # Check similarity across short-term + long-term
+    update_on_duplicate:
+      enabled: true                 # Update existing fact if duplicate found
+      merge_importance: "max"       # Take max importance score (max/avg/latest)
+      merge_metadata: true          # Merge tags, concepts, entities
+      refresh_ttl: true             # Refresh TTL for short-term memories
+
+# Redis Vector Configuration (for short-term memory with TTL)
+redis_vector:
+  short_term_index: "shortterm_memory_idx"
+  vector_dimensions: 384
+  similarity_threshold: 0.7
+
+  # TTL now controlled by memory_control.ttl.short_term
+  # embedding_model now uses transformers.models.embedder (consolidated)
+
+# Database Configuration
 databases:
   redis:
     host: "localhost"
     port: 6379
     db: 0
-    password: null
-    max_connections: 20
-    default_ttl: 604800
-    max_working_items: 7
+    # TTL and limits now controlled by memory_control section
   qdrant:
     host: "localhost"
     port: 6333
-    grpc_port: 6334
-    prefer_grpc: false
     collection_name: "agent_memories"
     vector_size: 384
     similarity_threshold: 0.7
 
-# Autonomous Agent Configuration
-autonomous:
-  thinking_interval_seconds: 3600  # Hourly thinking cycles
-  enable_background_thinking: true
-  enable_proactive_insights: true
-
-# Autonomous Agent System Messages
-agent_system_messages:
-  memory_agent: "You are the Memory Agent - the primary user interface hub. Handle all chat interactions, manage memory operations, and coordinate with other agents when needed. You have full access to user memory."
-  research_agent: "You are the Research Agent - external knowledge specialist. Search the web, verify facts, and provide current information. You cannot access personal user data but can gather external knowledge."
-  intelligence_agent: "You are the Intelligence Agent - autonomous thinking specialist. Analyze patterns, create life event timelines, generate proactive insights, and perform continuous reasoning. You have full memory access for strategic analysis."
-
-# TransformersService Configuration
+# Local Transformers (for Memory Reader, Memory Writer, Knowledge agents)
 transformers:
+  cache_dir: "./.models"
+  
+  # Core models for LOCAL processing
   models:
-    memory_classifier: "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
-    intent_classifier: "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
-    sentiment_analyzer: "cardiffnlp/twitter-roberta-base-sentiment-latest"
-    entity_extractor: "dbmdz/bert-large-cased-finetuned-conll03-english"
-    summarizer: "facebook/bart-large-cnn"
+    # Memory agents models
+    memory_classifier: "distilbert-base-uncased"
+    entity_extractor: "dslim/bert-base-NER"
+    summarizer: "sshleifer/distilbart-cnn-6-6"
     embedder: "sentence-transformers/all-MiniLM-L6-v2"
+    
+    # Additional models for local processing
+    intent_classifier: "distilbert-base-uncased" 
+    sentiment_analyzer: "cardiffnlp/twitter-roberta-base-sentiment-latest"
+    routing_classifier: "distilbert-base-uncased"
+    conflict_detector: "sentence-transformers/all-MiniLM-L6-v2"
+    
+  # Pipeline types (required by transformers_service.py)
+  pipeline_types:
+    memory_classifier: "text-classification"
+    entity_extractor: "ner"
+    summarizer: "summarization"
+    embedder: "feature-extraction"
+    intent_classifier: "text-classification"
+    sentiment_analyzer: "sentiment-analysis"
+    routing_classifier: "text-classification"
+    conflict_detector: "text-classification"
   
-  performance:
-    cache_size: 1000
-    device: "auto"
-    max_length: 512
-    batch_size: 1
   
+  # Simplified categories for 3-tier memory system
+  categories:
+    intent_types:
+      - "question"
+      - "statement"
+      - "request"
+      - "greeting"
+    
+    memory_types:
+      - "personal information"
+      - "goal setting"
+      - "preference statement"
+      - "experience sharing"
+      - "skill learning"
+      - "general conversation"
+    
+    routing_types:
+      - "memory_only"
+      - "research_only" 
+      - "parallel_execution"
+      - "sequential_research"
+      - "validation_mode"
+  
+  # Fallback settings
   fallback:
-    enabled: true
-    confidence_threshold: 0.3
-    use_keyword_fallback: true
-
-# Timeout Configurations
-timeouts:
-  api_calls: 60
-  database_operations: 20
-  local_model_loading: 30
-  websocket_connections: 10
+    confidence_threshold: 0.5
+    keyword_patterns:
+      personal_information: ["my name", "i am", "i live", "i work", "my age"]
+      goal_setting: ["goal", "plan", "want to", "need to", "objective"]
+      experience_sharing: ["happened", "experienced", "i did", "i went"]
+      skill_learning: ["learn", "study", "practice", "training"]
+      preference_statement: ["prefer", "like", "favorite", "love", "hate"]
+  
+  # Performance settings
+  performance:
+    device: "auto"
+    cache_size: 1000
 
 # Development Settings
 development:
-  debug_mode: true
+  debug_mode: false
   verbose_logging: true
-  monitoring_enabled: true
-  metrics_collection: true
+
+# Autonomous Intelligence Settings
+autonomous:
+  thinking_interval_seconds: 3600
+  enable_background_thinking: true
+  enable_proactive_insights: true
+  error_retry_seconds: 300

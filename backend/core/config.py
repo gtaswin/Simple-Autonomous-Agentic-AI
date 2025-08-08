@@ -59,35 +59,10 @@ class AssistantConfig:
         return None
     
     def _setup_defaults(self):
-        """Set up default configuration values"""
-        self.settings = {
-            "models": {
-                "default_model": "mixtral-8x7b",
-                "max_tokens": 500,
-                "temperature": 0.7,
-                "streaming": True
-            },
-            "memory": {
-                "cache_ttl": 3600,
-                "max_session_messages": 50,
-                "embedding_model": "all-MiniLM-L6-v2"
-            },
-            "features": {
-                "proactive_suggestions": True,
-                "auto_learn_preferences": True,
-                "task_management": True,
-                "pattern_detection": True
-            }
-        }
-        
-        # Default model routing settings
-        self.model_routes = {
-            "instant": "openrouter/mistral-7b",
-            "fast": "openrouter/mixtral-8x7b", 
-            "balanced": "gemini-1.5-flash",
-            "powerful": "gemini-1.5-pro",
-            "creative": "claude-3-sonnet"
-        }
+        """Set up minimal default configuration values (most come from settings.yaml)"""
+        # Only essential defaults that don't duplicate settings.yaml
+        self.settings = {}
+        self.model_routes = {}
         
     
     def _update_from_yaml(self):
@@ -136,21 +111,27 @@ class AssistantConfig:
         """Get API key for a specific provider from the config file."""
         return self.get(f"providers.{provider}.api_key")
     
-    def get_default_user_id(self) -> str:
-        """Get the default user ID from system configuration"""
-        return self.get("system.default_user_id", "admin")
+    def get_default_user_name(self) -> str:
+        """Get the default user name from user profile configuration"""
+        user_name = self.get("user.name")
+        if user_name is None:
+            raise ValueError("user.name not found in configuration")
+        return user_name
     
-    def get_system_config(self) -> Dict[str, Any]:
-        """Get system configuration settings"""
-        return self.get("system", {
-            "default_user_id": "admin",
-            "session_timeout_hours": 24,
-            "max_concurrent_sessions": 5
-        })
+    def get_user_profile(self) -> Dict[str, Any]:
+        """Get user profile configuration"""
+        user_profile = self.get("user")
+        if user_profile is None:
+            raise ValueError("user profile not found in configuration")
+        return user_profile
     
-    def get_autogen_config(self) -> Dict[str, Any]:
-        """Get AutoGen-specific configuration"""
-        return self.get("autogen", {})
+    def get_assistant_profile(self) -> Dict[str, Any]:
+        """Get assistant profile configuration"""
+        assistant_profile = self.get("assistant")
+        if assistant_profile is None:
+            raise ValueError("assistant profile not found in configuration")
+        return assistant_profile
+    
     
     
     # Properties for easy access to common config sections
@@ -162,38 +143,64 @@ class AssistantConfig:
     def memory(self):
         return self.settings.get("memory", {})
     
+    # =========================================
+    # UNIFIED MEMORY CONTROL METHODS
+    # =========================================
+    
+    def get_memory_ttl(self, memory_type: str, importance_level: str = "default") -> int:
+        """Get TTL for specific memory type and importance level"""
+        if memory_type == "short_term":
+            return self.get(f"memory_control.ttl.short_term.{importance_level}", 86400)
+        elif memory_type == "working_memory":
+            return self.get("memory_control.ttl.working_memory", 604800)
+        elif memory_type == "session":
+            return self.get("memory_control.ttl.session", 0)
+        elif memory_type == "activity_extension":
+            return self.get("memory_control.ttl.activity_extension", 86400)
+        else:
+            return 86400  # 24 hours default
+    
+    def get_memory_limit(self, memory_type: str) -> int:
+        """Get item limit for specific memory type"""
+        if memory_type == "working_memory":
+            return self.get("memory_control.limits.working_memory_items", 7)
+        elif memory_type == "short_term":
+            return self.get("memory_control.limits.short_term_items", 100)
+        elif memory_type == "session":
+            return self.get("memory_control.limits.session_conversations", 50)
+        elif memory_type == "search_results":
+            return self.get("memory_control.limits.search_results_limit", 20)
+        else:
+            return 10  # Default limit
+    
+    def get_short_term_ttl_values(self) -> Dict[str, int]:
+        """Get all short-term memory TTL values for memory writer agent"""
+        return {
+            "minimal": self.get("memory_control.ttl.short_term.minimal", 86400),
+            "short": self.get("memory_control.ttl.short_term.short", 604800),
+            "medium": self.get("memory_control.ttl.short_term.medium", 2592000),
+            "extended": self.get("memory_control.ttl.short_term.extended", 7776000),
+            "default": self.get("memory_control.ttl.short_term.default", 86400)
+        }
+    
     
     @property
     def features(self):
         return self.settings.get("features", {})
     
     def get_token_limit(self, operation_type: str) -> int:
-        """Get token limit for specific operation type from settings"""
+        """Get token limit for Organizer Agent (only agent using external LLMs)"""
         token_limits = self.get("token_limits", {})
         
-        # Check for specific operation override first
-        if operation_type in token_limits:
-            return token_limits[operation_type]
+        # Only Organizer Agent uses external LLMs, others use local transformers
+        if operation_type in ["organizer_agent", "organizer", "reasoning"]:
+            return token_limits.get("default", 4096)
         
-        # Check by category mapping
-        category = self.get(f"ai_functions.{operation_type}")
-        if category:
-            category_key = f"{category}_operations"
-            if category_key in token_limits:
-                return token_limits[category_key]
-        
-        # Default based on operation type patterns
-        if "fast" in operation_type or "quick" in operation_type:
-            return token_limits.get("fast_operations", 800)
-        elif "quality" in operation_type or "complex" in operation_type:
-            return token_limits.get("quality_operations", 2500)
-        elif "premium" in operation_type or "planning" in operation_type:
-            return token_limits.get("premium_operations", 4000)
-        else:
-            return token_limits.get("balanced_operations", 1500)
+        # For local transformers (Memory Reader, Memory Writer, Knowledge), no token limits needed
+        return 512  # Small limit for local processing
     
     def get_safe_token_limit(self, operation_type: str, requested_tokens: int = None) -> int:
-        """Get safe token limit with bounds checking"""
+        """Get safe token limit with bounds checking - only for Organizer Agent"""
         token_limits = self.get("token_limits", {})
         
         # Get base limit for operation
@@ -202,65 +209,143 @@ class AssistantConfig:
         # Use requested if provided, otherwise use base
         target_limit = requested_tokens if requested_tokens else base_limit
         
-        # Apply safety bounds
-        max_limit = token_limits.get("absolute_maximum", 8000)
-        min_limit = token_limits.get("minimum_safe", 100)
+        # Apply safety bounds (only for Organizer Agent external LLM usage)
+        if operation_type in ["organizer_agent", "organizer", "reasoning"]:
+            max_limit = token_limits.get("absolute_maximum", 32768)
+            min_limit = token_limits.get("minimum_safe", 100)
+            return max(min_limit, min(target_limit, max_limit))
         
-        return max(min_limit, min(target_limit, max_limit))
+        # For local transformers, return small fixed limit
+        return 512
     
     def get_model_for_category(self, category: str) -> str:
-        """Get model for specific category using new category-based system"""
-        valid_categories = [
-            "memory", "coordination", "chat", "thinking", "reasoning", 
-            "research", "creative", "decisions"
-        ]
+        """Get model for specific category - only Organizer Agent uses external LLMs"""
+        # Only organizer_agent uses external LLMs in the new 4-agent architecture
+        valid_categories = ["organizer_agent", "organizer", "reasoning"]
         
         if category not in valid_categories:
-            raise ValueError(f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}")
+            raise ValueError(f"Invalid category '{category}'. Only Organizer Agent uses external LLMs. Other agents use local transformers.")
         
-        # Get the model category (fast/balanced/quality/premium) for this function
-        function_category = self.get(f"ai_functions.{category}")
-        if not function_category:
-            raise ValueError(f"Missing configuration: ai_functions.{category} not found in settings.yaml. Please configure ai_functions section.")
-        
-        # Get the model list for this category
-        model_list = self.get(f"model_categories.{function_category}")
+        # Get the external model list for Organizer Agent
+        model_list = self.get("organizer_external_models")
         if not model_list or not isinstance(model_list, list) or len(model_list) == 0:
-            raise ValueError(f"Missing configuration: model_categories.{function_category} not found or empty in settings.yaml. Please configure model_categories section.")
+            raise ValueError(f"Missing configuration: organizer_external_models not found or empty in settings.yaml. Please configure organizer_external_models section.")
         
         # Return the first model in the list (primary model)
         return model_list[0]
+    
+    async def call_llm_with_fallback(self, category: str, messages: list, **kwargs) -> Any:
+        """Call LLM with automatic fallback to next model in category if primary fails"""
+        import litellm
+        
+        # Get all models for this category
+        model_list = self.get_model_list_for_category(category)
+        
+        last_error = None
+        for i, model in enumerate(model_list):
+            try:
+                if self.get("development.debug_mode", False) and i > 0:
+                    print(f"🔄 Trying fallback model {i+1}/{len(model_list)}: {model}")
+                
+                # Set default parameters
+                # For OpenAI (default provider), strip prefix. For others, we'll set the model name in provider-specific logic
+                actual_model = model
+                if "openai/" in model.lower():
+                    actual_model = model.replace("openai/", "")
+                
+                call_params = {
+                    "model": actual_model,
+                    "messages": messages,
+                    "max_tokens": kwargs.get("max_tokens", 1000),
+                    "temperature": kwargs.get("temperature", 0.7),
+                    "timeout": kwargs.get("timeout", 30)
+                }
+                
+                # Add API key and configure provider-specific settings
+                if "groq/" in model.lower():
+                    api_key = self.get("providers.groq.api_key")
+                    if api_key:
+                        call_params["api_key"] = api_key
+                        # LiteLLM format for Groq: groq/model_name
+                        call_params["model"] = model  # Keep the groq/ prefix
+                        actual_model = model  # Override the stripped version
+                elif "anthropic/" in model.lower() or "claude" in model.lower():
+                    api_key = self.get("providers.anthropic.api_key")
+                    if api_key:
+                        call_params["api_key"] = api_key
+                        # LiteLLM format for Anthropic: claude-3-haiku-20240307 or keep anthropic/ prefix
+                        call_params["model"] = model  # Keep the anthropic/ prefix
+                        actual_model = model
+                elif "openai/" in model.lower() or "gpt" in model.lower():
+                    api_key = self.get("providers.openai.api_key")
+                    if api_key:
+                        call_params["api_key"] = api_key
+                        # For OpenAI, we can strip the prefix as it's the default
+                        # call_params["model"] stays as actual_model
+                elif "gemini/" in model.lower() or "google" in model.lower():
+                    api_key = self.get("providers.gemini.api_key")
+                    if api_key:
+                        call_params["api_key"] = api_key
+                        # LiteLLM format for Gemini: gemini/gemini-1.5-flash
+                        call_params["model"] = model  # Keep the gemini/ prefix
+                        actual_model = model
+                
+                call_params.update(kwargs)
+                
+                response = await litellm.acompletion(**call_params)
+                
+                if self.get("development.debug_mode", False) and i > 0:
+                    print(f"✅ Fallback successful with model: {model}")
+                
+                return response
+                
+            except Exception as e:
+                last_error = e
+                if self.get("development.debug_mode", False):
+                    print(f"❌ Model {model} failed: {str(e)[:100]}...")
+                
+                # Continue to next model if available
+                if i < len(model_list) - 1:
+                    continue
+                else:
+                    # All models failed
+                    break
+        
+        # If we get here, all models failed
+        raise Exception(f"All models in category '{category}' failed. Last error: {last_error}")
         
     def get_model_list_for_category(self, category: str) -> list:
-        """Get full model list for category (for fallback support)"""
-        function_category = self.get(f"ai_functions.{category}")
-        if not function_category:
-            raise ValueError(f"Missing configuration: ai_functions.{category} not found in settings.yaml. Please configure ai_functions section.")
-            
-        model_list = self.get(f"model_categories.{function_category}")
+        """Get full model list for category - only valid for Organizer Agent"""
+        valid_categories = ["organizer_agent", "organizer", "reasoning"]
+        
+        if category not in valid_categories:
+            raise ValueError(f"Invalid category '{category}'. Only Organizer Agent uses external LLMs. Other agents use local transformers.")
+        
+        # Get the external model list for Organizer Agent
+        model_list = self.get("organizer_external_models")
         if not model_list or not isinstance(model_list, list) or len(model_list) == 0:
-            raise ValueError(f"Missing configuration: model_categories.{function_category} not found or empty in settings.yaml. Please configure model_categories section.")
+            raise ValueError(f"Missing configuration: organizer_external_models not found or empty in settings.yaml. Please configure organizer_external_models section.")
             
         return model_list
     
-    def get_ai_analysis_model(self) -> str:
-        """Get the AI analysis model (uses memory category)"""
-        return self.get_model_for_category("memory")
-    
-    def get_llm_config(self, function_type: str = "chat") -> Dict[str, Any]:
+    def get_llm_config(self, function_type: str = "organizer_agent") -> Dict[str, Any]:
         """
-        Get AutoGen-compatible LLM configuration for specific function type
+        Get LLM configuration - only for Organizer Agent (external LLM usage)
         """
         try:
+            # Only Organizer Agent uses external LLMs
+            if function_type not in ["organizer_agent", "organizer", "reasoning", "chat"]:
+                raise ValueError(f"LLM configuration only available for Organizer Agent. '{function_type}' uses local transformers.")
+            
             # Get model for the function type
-            model = self.get_model_for_category(function_type)
+            model = self.get_model_for_category("organizer_agent")
             
             # Base configuration
             llm_config = {
                 "model": model,
-                "temperature": self.get("models.temperature", 0.7),
-                "max_tokens": self.get_safe_token_limit(function_type),
-                "timeout": 30
+                "temperature": self.get("model_settings.temperature", 0.7),
+                "max_tokens": self.get_safe_token_limit("organizer_agent"),
+                "timeout": self.get("model_settings.timeout", 30)
             }
             
             # Add API keys based on model provider (using existing settings.yaml structure)
@@ -283,7 +368,6 @@ class AssistantConfig:
                 api_key = self.get("providers.groq.api_key") or os.getenv("GROQ_API_KEY")
                 if api_key:
                     llm_config["api_key"] = api_key
-                    llm_config["base_url"] = "https://api.groq.com/openai/v1"
                     
             elif "openrouter" in model.lower():
                 api_key = self.get("providers.openrouter.api_key") or os.getenv("OPENROUTER_API_KEY")
@@ -299,47 +383,12 @@ class AssistantConfig:
             return llm_config
             
         except Exception as e:
-            # Fallback configuration
+            # Fallback configuration for Organizer Agent
             return {
-                "model": "gpt-3.5-turbo",
-                "api_key": os.getenv("OPENAI_API_KEY", "dummy"),
+                "model": "anthropic/claude-3-sonnet-20240229",  # Use first model from organizer_external_models
                 "temperature": 0.7,
-                "max_tokens": 500,
+                "max_tokens": 4096,
                 "timeout": 30
             }
     
-    def get_autogen_config(self) -> Dict[str, Any]:
-        """Get AutoGen-specific configuration"""
-        return {
-            "memory_agent": self.get_llm_config("memory"),
-            "research_agent": self.get_llm_config("research"),
-            "intelligence_agent": self.get_llm_config("thinking"),
-            "coordination": self.get_llm_config("coordination"),
-            "tavily_api_key": self.get("tools.tavily.api_key"),
-            "group_chat_settings": {
-                "max_round": self.get("autogen.max_rounds", 10),
-                "speaker_selection_method": self.get("autogen.speaker_selection", "auto"),
-                "allow_repeat_speaker": self.get("autogen.allow_repeat_speaker", False)
-            }
-        }
     
-    def resolve_model_tier(self, tier: str) -> str:
-        """Resolve a model tier to actual LiteLLM model specification"""
-        if not tier:
-            raise ValueError("Model tier is required but not specified in configuration")
-            
-        # Check if tier is a category name
-        valid_categories = [
-            "memory", "learning", "reasoning", "reflection", "planning", 
-            "agents", "coordination", "chat", "creative", "analysis", "decisions"
-        ]
-        
-        if tier in valid_categories:
-            return self.get_model_for_category(tier)
-            
-        if tier == "default":
-            # Use the memory model as default
-            return self.get_model_for_category("memory")
-            
-        # If it's not a category or "default", assume it's already a full model specification
-        return tier

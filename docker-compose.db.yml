@@ -5,12 +5,16 @@ version: '3.8'
 
 services:
   redis-dev:
-    image: redis:7-alpine
+    image: redis/redis-stack:latest
     ports:
-      - "6379:6379"
+      - "6379:6379"  # Redis port
+      - "8001:8001"  # RedisInsight web UI
     volumes:
       - ./data/redis:/data
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    environment:
+      - REDIS_ARGS=--appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+      - REDISEARCH_ARGS=
+      - REDISJSON_ARGS=
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
